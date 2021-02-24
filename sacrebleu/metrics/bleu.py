@@ -74,9 +74,20 @@ class BLEUScore(BaseScore):
             rl=self.ref_len)
         return s
 
+# Adjust BLEU class to be applicable for various size n-gram order
+from argparse import Namespace
+from ..tokenizers import DEFAULT_TOKENIZER
+
+args = Namespace(
+    smooth_method='exp',
+    smooth_value=None,
+    force=False,
+    lc=False,
+    tokenize=DEFAULT_TOKENIZER,
+)
+
 
 class BLEU:
-    NGRAM_ORDER = 4
 
     SMOOTH_DEFAULTS = {
         # The defaults for `floor` and `add-k` are obtained from the following paper
@@ -89,7 +100,7 @@ class BLEU:
         'exp': None,    # No value is required
     }
 
-    def __init__(self, args):
+    def __init__(self, args=args, n_gram_order=4):
         self.name = 'bleu'
         self.force = args.force
         self.lc = args.lc
@@ -98,12 +109,13 @@ class BLEU:
         self.tokenizer = TOKENIZERS[args.tokenize]()
         self.signature = BLEUSignature(args)
 
+        self.NGRAM_ORDER = n_gram_order
+
         # Sanity check
         assert self.smooth_method in self.SMOOTH_DEFAULTS.keys(), \
             "Unknown smooth_method '{}'".format(self.smooth_method)
 
-    @staticmethod
-    def extract_ngrams(line, min_order=1, max_order=NGRAM_ORDER) -> Counter:
+    def extract_ngrams(self, line, min_order=1) -> Counter:
         """Extracts all the ngrams (min_order <= n <= max_order) from a sequence of tokens.
 
         :param line: A segment containing a sequence of words.
@@ -111,6 +123,7 @@ class BLEU:
         :param max_order: Maximum n-gram length (default: NGRAM_ORDER).
         :return: a dictionary containing ngrams and counts
         """
+        max_order = self.NGRAM_ORDER
 
         ngrams = Counter()  # type: Counter
         tokens = line.split()
@@ -121,8 +134,7 @@ class BLEU:
 
         return ngrams
 
-    @staticmethod
-    def reference_stats(refs, output_len):
+    def reference_stats(self, refs, output_len):
         """Extracts reference statistics for a given segment.
 
         :param refs: A list of segment tokens.
@@ -145,14 +157,14 @@ class BLEU:
                 if reflen < closest_len:
                     closest_len = reflen
 
-            ngrams_ref = BLEU.extract_ngrams(ref)
+            ngrams_ref = self.extract_ngrams(ref)
             for ngram in ngrams_ref.keys():
                 ngrams[ngram] = max(ngrams[ngram], ngrams_ref[ngram])
 
         return ngrams, closest_diff, closest_len
 
-    @staticmethod
-    def compute_bleu(correct: List[int],
+    def compute_bleu(self,
+                     correct: List[int],
                      total: List[int],
                      sys_len: int,
                      ref_len: int,
@@ -185,11 +197,11 @@ class BLEU:
         if smooth_value is None:
             smooth_value = BLEU.SMOOTH_DEFAULTS[smooth_method]
 
-        precisions = [0.0 for x in range(BLEU.NGRAM_ORDER)]
+        precisions = [0.0 for x in range(self.NGRAM_ORDER)]
 
         smooth_mteval = 1.
-        effective_order = BLEU.NGRAM_ORDER
-        for n in range(1, BLEU.NGRAM_ORDER + 1):
+        effective_order = self.NGRAM_ORDER
+        for n in range(1, self.NGRAM_ORDER + 1):
             if smooth_method == 'add-k' and n > 1:
                 correct[n-1] += smooth_value
                 total[n-1] += smooth_value
@@ -299,12 +311,12 @@ class BLEU:
             output, *refs = [self.tokenizer(x.rstrip()) for x in lines]
 
             output_len = len(output.split())
-            ref_ngrams, closest_diff, closest_len = BLEU.reference_stats(refs, output_len)
+            ref_ngrams, closest_diff, closest_len = self.reference_stats(refs, output_len)
 
             sys_len += output_len
             ref_len += closest_len
 
-            sys_ngrams = BLEU.extract_ngrams(output)
+            sys_ngrams = self.extract_ngrams(output)
             for ngram in sys_ngrams.keys():
                 n = len(ngram.split())
                 correct[n-1] += min(sys_ngrams[ngram], ref_ngrams.get(ngram, 0))
